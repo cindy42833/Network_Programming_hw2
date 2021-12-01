@@ -7,6 +7,8 @@
 #include <sys/types.h>
 #include <sys/select.h>
 
+#define Buffer_Max 1024
+
 int connect_to_server(const char *host, const char *port)
 {
 
@@ -42,7 +44,7 @@ int connect_to_server(const char *host, const char *port)
 int Login(int socketfd)
 {
     int readCnt = 0;
-    char input_acc[64], input_pwd[64] , buf[1024];
+    char input_acc[64], input_pwd[64], buf[1024];
 
     for (int i = 2; i >= 0; i--)
     {
@@ -71,17 +73,19 @@ int Login(int socketfd)
         }
         else
         {
-            if(strcmp(buf, "Login Success") == 0) {
+            if (strcmp(buf, "Login Success") == 0)
+            {
                 printf("Login Success\n");
                 return 0;
             }
-            else if(strcmp(buf, "Login Fail") == 0) {
-                if(i > 0)
+            else if (strcmp(buf, "Login Fail") == 0)
+            {
+                if (i > 0)
                     printf("Login Fail, you have %d times to try\n", i);
                 else
                     printf("Login Fail, connection closed\n");
             }
-            else if(strcmp(buf, "Not allow to repeatly login") == 0)
+            else if (strcmp(buf, "Not allow to repeatly login") == 0)
                 printf("Not allow to repeatly login\n");
         }
     }
@@ -90,15 +94,47 @@ int Login(int socketfd)
 
 int main()
 {
-    int socketfd, readCnt = 0;
+    int socketfd, readCnt = 0, writeCnt = 0;
     char input_acc[64], input_pwd[64], buf[1024];
 
     socketfd = connect_to_server("127.0.0.1", "8080");
 
-    if(Login(socketfd) < 0) {
+    if (Login(socketfd) < 0)
         exit(EXIT_SUCCESS);
+    memset(buf, 0, sizeof(buf));
+    getchar();
+    rewind(stdin);
+    while (fgets(buf, 1024, stdin) != NULL)
+    {
+        buf[strlen(buf) - 1] = '\0';
+        if (write(socketfd, buf, sizeof(buf)) < 0)
+        {
+            perror("Client write error");
+            continue;
+        }
+
+        readCnt = read(socketfd, buf, sizeof(buf));
+        if (readCnt == 0)
+        {
+            printf("Server has terminated\n");
+            break;
+        }
+        else if (readCnt < 0)
+        {
+            perror("Client read error");
+            continue;
+        }
+        else {
+            if(strncmp(buf, "logout", 6) == 0) {
+                break;
+            }
+            else {
+                printf("test\n");
+                printf("%s\n", buf);
+            }
+        }
     }
-    while(fgets(buf, 1024, stdin) != NULL) {
-        ;
-    }
+    shutdown(socketfd, SHUT_WR);
+    close(socketfd);
+    return 0;
 }

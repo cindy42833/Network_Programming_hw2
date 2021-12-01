@@ -8,11 +8,13 @@
 #include <sys/select.h>
 
 #define USER_MAX 4
+#define Buffer_Max 1024
 
 typedef struct user
 {
     int fd;
     int online;
+    int onGame;
     char acc[64];
     char pwd[64];
 } Users;
@@ -20,23 +22,27 @@ typedef struct user
 Users users[] = {
     {.fd = -1,
      .online = 0,
+     .onGame = 0,
      .acc = "aaa",
      .pwd = "aaa"},
     {.fd = -1,
      .online = 0,
+     .onGame = 0,
      .acc = "bbb",
      .pwd = "bbb"},
     {.fd = -1,
      .online = 0,
+     .onGame = 0,
      .acc = "ccc",
      .pwd = "ccc"},
     {.fd = -1,
      .online = 0,
+     .onGame = 0,
      .acc = "ddd",
      .pwd = "ddd"},
 };
 
-int fdmax, old_fdmax;
+int fdmax;
 fd_set fds, read_fds;
 
 int create_socket(const char *host, const char *port)
@@ -82,10 +88,23 @@ int create_socket(const char *host, const char *port)
     return socket_listen;
 }
 
-int userLogin(int connectFd)
+void acceptClient(int listenFd)
+{
+    int connectFd;
+    if ((connectFd = accept(listenFd, NULL, NULL)) < 0)
+        perror("Accept error");
+    else
+    {
+        if (connectFd > fdmax)
+            fdmax = connectFd;
+        FD_SET(connectFd, &fds);
+    }
+}
+
+void userLogin(int connectFd, int *userlist)
 {
     int readCnt = 0;
-    char buf[1024];
+    char buf[Buffer_Max];
 
     char input_acc[64], input_pwd[64];
 
@@ -94,50 +113,109 @@ int userLogin(int connectFd)
         if (readCnt == 0)
         { // client terminate
             printf("Client disconnection\n");
+            FD_CLR(connectFd, &fds);
+            close(connectFd);
         }
         else
             perror("Server read error");
-        return -1;
     }
-    if ((readCnt = read(connectFd, input_pwd, sizeof(input_pwd))) <= 0)
-        perror("Server read error");
-
-    for (int j = 0; j < USER_MAX; j++)
+    else
     {
-        if (strcmp(users[j].acc, input_acc) == 0 && strcmp(users[j].pwd, input_pwd) == 0)
+        if ((readCnt = read(connectFd, input_pwd, sizeof(input_pwd))) <= 0)
+            perror("Server read error");
+        else
         {
-            if (users[j].online)
+            for (int j = 0; j < USER_MAX; j++)
             {
-                sprintf(buf, "Not allow to repeatly login");
-                if (write(connectFd, buf, sizeof(buf)) < 0)
-                    perror("Server write error");
-                return 0;
-            }
-            else
-            {
-                users[j].fd = connectFd; // record a user fd
-                users[j].online = 1;
-                sprintf(buf, "Login Success");
+                if (strcmp(users[j].acc, input_acc) == 0 && strcmp(users[j].pwd, input_pwd) == 0)
+                {
+                    if (users[j].online) // Login repeatly
+                    {
+                        sprintf(buf, "Not allow to repeatly login");
+                        if (write(connectFd, buf, sizeof(buf)) < 0)
+                            perror("Server write error");
+                    }
+                    else // Login success
+                    {
+                        users[j].fd = connectFd; // record a user fd
+                        users[j].online = 1;
+                        *userlist = j; // record user id
+                        sprintf(buf, "Login Success");
 
-                if (write(connectFd, buf, sizeof(buf)) < 0)
-                    perror("Server write error");
-                return j;
+                        if (write(connectFd, buf, sizeof(buf)) < 0)
+                            perror("Server write error");
+                    }
+                    return;
+                }
             }
+            // Login fail
+            sprintf(buf, "Login Fail");
+            if (write(connectFd, buf, sizeof(buf)) < 0)
+                perror("Server write error");
         }
     }
-    sprintf(buf, "Login Fail");
+}
+
+void userLogout(int connectFd, int *userlist) {
+    char buf[Buffer_Max];
+
+    printf("Client logout\n");
+    users[userlist[connectFd]].fd = -1;
+    users[userlist[connectFd]].online = 0;
+    users[userlist[connectFd]].onGame = 0;
+
+    userlist[connectFd] = -1;
+    sprintf(buf, "logout");
     if (write(connectFd, buf, sizeof(buf)) < 0)
         perror("Server write error");
 
-    return 0;
+    FD_CLR(connectFd, &fds);
+    shutdown(connectFd, SHUT_RD);    
+    close(connectFd);
+}
+
+void listUsers(int connectFd) {
+    char buf[Buffer_Max], info[128];
+
+    sprintf(buf, "------- Online list -------\n");
+
+    for(int i=0; i<USER_MAX; i++) {
+        if(users[i].online) {
+            sprintf(info, "userId: %d, acc: %s\n", i, users[i].acc);
+            strncat(buf, info, strlen(info));
+        }
+    }
+    sprintf(info, "-------- End list  --------\n");
+    strncat(buf, info, strlen(info));
+    if (write(connectFd, buf, sizeof(buf)) < 0)
+        perror("Server write error");
+}
+
+void sentInvitation(int *userlist, int selfFd, int opponentFd) {
+    char buf[Buffer_Max];
+
+    sprintf(buf, "%s wants to play with you, type yes or no: \n", users[userlist[selfFd]].acc);
+    if (write(opponentFd, buf, sizeof(buf)) < 0) {
+        perror("Server write error");
+        sprintf(buf, "Send Error");
+        if (write(selfFd, buf, sizeof(buf)) < 0)
+            perror("Server write error");
+        return;
+    }
+    sprintf(buf, "Waiting...\n");
+    if(write(selfFd, buf, sizeof(buf)) < 0) {
+        perror("Server write error");
+    }
+    return;
 }
 
 int main()
 {
-    int listenFd, connectFd;
+    int listenFd, connectFd, readCnt, writeCnt, opponent;
     int userlist[64];
-    char buf[1024];
+    char buf[Buffer_Max];
     memset(userlist, -1, sizeof(userlist));
+
 
     listenFd = create_socket(NULL, "8080");
 
@@ -145,7 +223,6 @@ int main()
     FD_ZERO(&read_fds);
     FD_SET(listenFd, &fds);
     fdmax = listenFd;
-    old_fdmax = fdmax;
 
     while (1)
     {
@@ -158,44 +235,43 @@ int main()
         }
 
         if (FD_ISSET(listenFd, &read_fds))
-        {
-            if ((connectFd = accept(listenFd, NULL, NULL)) < 0)
-            {
-                perror("Accept error");
-                continue;
-            }
-            else
-            {
-                if (connectFd > fdmax)
-                {
-                    old_fdmax = fdmax;
-                    fdmax = connectFd;
-                }
-                FD_SET(connectFd, &fds);
-            }
-        }
+            acceptClient(listenFd);
         else
         {
             for (int i = 0; i <= fdmax; i++)
             {
                 if (FD_ISSET(i, &read_fds))
                 {
-                    printf("list: %d\n", userlist[i]);
-                    if (userlist[i] == -1)
-                    { // login
-                        int login = 0;
-                        if ((login = userLogin(i)) < 0)
+                    if (userlist[i] == -1) // Login
+                        userLogin(i, &userlist[i]);
+                    else
+                    {
+                        if ((readCnt = read(i, buf, sizeof(buf))) <= 0)
                         {
-                            fdmax = old_fdmax;
-                            FD_CLR(i, &fds);
+                            if (readCnt == 0)
+                            {
+                                printf("Client disconnection\n");
+                                users[userlist[i]].online = 0;
+                                FD_CLR(i, &fds);
+                                close(i);
+                            }
+                            else
+                                perror("Server read error");
                         }
-                        else if (login > 0)
-                            userlist[i] = login;
+                        else
+                        {
+                            if (strncmp(buf, "list", 4) == 0)
+                                listUsers(i);
+                            else if(strncmp(buf, "logout", 6) == 0) {
+                                userLogout(i, userlist);
+                            }
+                            else if(strncmp(buf, "PK", 2) == 0){
+                                opponent = atoi(buf + 3);
+                                printf("opponent: %d, fd: %d\n", opponent, users[opponent].fd);
+                                sentInvitation(userlist, i, users[opponent].fd);
+                            }
+                        }
                     }
-                    // else
-                    // {
-                    //     /* Do other */
-                    // }
                     break;
                 }
             }
