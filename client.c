@@ -93,7 +93,7 @@ int Login(int socketfd)
     return -1;
 }
 
-int parseResponse(int socketfd)
+int sendRequest(int socketfd)
 {
     int readCnt = 0, writeCnt = 0;
     char buf[Buffer_Max];
@@ -102,11 +102,22 @@ int parseResponse(int socketfd)
         return -1;
 
     buf[strlen(buf) - 1] = '\0';
+    if(strncmp(buf, "logout", 6) == 0)
+        return 0;
+
     if (write(socketfd, buf, sizeof(buf)) < 0)
     {
         perror("Client write error");
         return -1;
     }
+    return 1;
+}
+
+int parseResponse(int socketfd) {
+    int readCnt = 0;
+    char buf[Buffer_Max];
+
+    buf[strlen(buf) - 1] = '\0';
 
     readCnt = read(socketfd, buf, sizeof(buf));
     if (readCnt == 0)
@@ -121,12 +132,8 @@ int parseResponse(int socketfd)
     }
     else
     {
-        if (strncmp(buf, "logout", 6) == 0)
-            return 0;
-        else {
-            printf("%s\n", buf);
-            return 1;
-        }
+        printf("%s\n", buf);
+        return 1;
     }
 }
 
@@ -150,20 +157,19 @@ int main()
 
         if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1)
         {
-            perror("select");
+            perror("Select error");
             continue;
         }
 
-        if (FD_ISSET(0, &read_fds))
-        {
+        if (FD_ISSET(socketfd, &read_fds))
             ret = parseResponse(socketfd);
-
-            if(ret == -1)
-                continue;
-            else if(ret == 0)
-                break;
-        }
-
+        else
+            ret = sendRequest(socketfd);
+            
+        if(ret == -1)
+            continue;
+        else if(ret == 0)
+            break;
     }
     shutdown(socketfd, SHUT_WR);
     close(socketfd);

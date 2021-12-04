@@ -8,6 +8,7 @@
 #include <sys/select.h>
 
 #define USER_MAX 4
+#define ROOM_MAX 4
 #define Buffer_Max 1024
 
 typedef struct user
@@ -15,33 +16,69 @@ typedef struct user
     int fd;
     int online;
     int onGame;
+    int roomID;
     char acc[64];
     char pwd[64];
 } Users;
 
+typedef struct room
+{
+    char board[9];
+    int player1;
+    int player2;
+} Rooms;
+
 Users users[] = {
     {.fd = -1,
      .online = 0,
-     .onGame = 0,
+     .onGame = -1,
+     .roomID = -1,
      .acc = "aaa",
      .pwd = "aaa"},
     {.fd = -1,
      .online = 0,
-     .onGame = 0,
+     .onGame = -1,
+     .roomID = -1,
      .acc = "bbb",
      .pwd = "bbb"},
     {.fd = -1,
      .online = 0,
-     .onGame = 0,
+     .onGame = -1,
+     .roomID = -1,
      .acc = "ccc",
      .pwd = "ccc"},
     {.fd = -1,
      .online = 0,
-     .onGame = 0,
+     .onGame = -1,
+     .roomID = -1,
      .acc = "ddd",
      .pwd = "ddd"},
 };
 
+Rooms rooms[4] = {
+    {
+        .board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+        .player1 = -1,
+        .player2 = -1,
+    },
+    {
+        .board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+        .player1 = -1,
+        .player2 = -1,
+    },
+    {
+        .board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+        .player1 = -1,
+        .player2 = -1,
+    },
+    {
+        .board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+        .player1 = -1,
+        .player2 = -1,
+    },
+};
+
+int RoomActive[4];
 int fdmax;
 fd_set fds, read_fds;
 
@@ -101,6 +138,20 @@ void acceptClient(int listenFd)
     }
 }
 
+void userLogout(int connectFd, int *userlist)
+{
+    printf("Client logout\n");
+    users[*userlist].fd = -1;
+    users[*userlist].online = 0;
+    users[*userlist].onGame = -1;
+    users[*userlist].roomID = -1;
+
+    *userlist = -1;
+    FD_CLR(connectFd, &fds);
+    shutdown(connectFd, SHUT_RD);
+    close(connectFd);
+}
+
 void userLogin(int connectFd, int *userlist)
 {
     int readCnt = 0;
@@ -114,6 +165,7 @@ void userLogin(int connectFd, int *userlist)
         { // client terminate
             printf("Client disconnection\n");
             FD_CLR(connectFd, &fds);
+            shutdown(connectFd, SHUT_RD);
             close(connectFd);
         }
         else
@@ -156,25 +208,6 @@ void userLogin(int connectFd, int *userlist)
     }
 }
 
-void userLogout(int connectFd, int *userlist)
-{
-    char buf[Buffer_Max];
-
-    printf("Client logout\n");
-    users[userlist[connectFd]].fd = -1;
-    users[userlist[connectFd]].online = 0;
-    users[userlist[connectFd]].onGame = 0;
-
-    userlist[connectFd] = -1;
-    sprintf(buf, "logout");
-    if (write(connectFd, buf, sizeof(buf)) < 0)
-        perror("Server write error");
-
-    FD_CLR(connectFd, &fds);
-    shutdown(connectFd, SHUT_RD);
-    close(connectFd);
-}
-
 void listUsers(int connectFd)
 {
     char buf[Buffer_Max], info[128];
@@ -195,41 +228,163 @@ void listUsers(int connectFd)
         perror("Server write error");
 }
 
+int selectRoom()
+{
+    for (int i = 0; i < ROOM_MAX; i++)
+    {
+        if (RoomActive[i] == 0)
+            return i;
+    }
+    return -1;
+}
+
+void leaveGame(int userID) {
+    users[userID].onGame = -1;
+    users[userID].roomID = -1;
+}
+
+void resetGame(int roomID)
+{
+    RoomActive[roomID] = 0;
+    rooms[roomID].board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
+    rooms[roomID].player1 = -1;
+    rooms[roomID].player2 = -1;    
+}
+
+void acceptGame(int player1_ID, int player2_ID, int *userlist)
+{
+    int readCnt, writeCnt, roomID = users[player1_ID].roomID, player1_fd = users[player1_ID].fd, player2_fd = users[player2_ID].fd
+    char buf[Buffer_Max];
+    
+    users[player1_ID].onGame = 1;
+    users[player2_ID].onGame = 1;
+
+    sprintf(buf, "Game Start");
+
+    if((writeCnt = write(player1_fd, buf, sizeof(buf))) <= 0) {
+        if(writeCnt == 0) {
+            userLogout(player1_fd, &userlist[player1_fd]);
+            sprintf(buf, "Game terminated because the other player left");
+
+            if()
+            leaveGame(player2_ID);
+            resetGame(roomID);
+        }
+        else {  /* Error Handler */
+            perror("Server write error");
+        }
+    }
+
+    if((writeCnt = write(player2_fd, buf, sizeof(buf))) <=0) {
+        if(writeCnt == 0) {
+            userLogout(player2_fd, &userlist[player2_fd]);
+            leaveGame(player1_ID);
+            resetGame(roomID);
+        }
+        else {  /* Error Handler */
+            perror("Server write error"); 
+        }
+    }
+}
+
+void rejectGame(int player1_ID, int player2_ID, int *userlist)
+{
+    int readCnt, writeCnt, roomID = users[player1_ID].roomID, player1_fd = users[player1_ID].fd, player2_fd = users[player2_ID].fd
+    char buf[Buffer_Max];
+    
+    users[player1_ID].onGame = 1;
+    users[player2_ID].onGame = 1;
+
+    sprintf(buf, "Game Start");
+
+    if((writeCnt = write(player1_fd, buf, sizeof(buf))) <= 0) {
+        if(writeCnt == 0) {
+            userLogout(player1_fd, &userlist[player1_fd]);
+            leaveGame(player2_ID);
+            resetGame(roomID);
+        }
+        else {  /* Error Handler */
+            perror("Server write error");
+        }
+    }
+
+    if((writeCnt = write(player2_fd, buf, sizeof(buf))) <=0) {
+        if(writeCnt == 0) {
+            userLogout(player2_fd, &userlist[player2_fd]);
+            leaveGame(player1_ID);
+            resetGame(roomID);
+        }
+        else {  /* Error Handler */
+            perror("Server write error"); 
+        }
+    }
+}
+
+
 void sentInvitation(int *userlist, int selfFd, int opponentFd)
 {
+    int roomID, writeCnt, selfID = userlist[selfFd], opponentID = userlist[opponentFd];
     char buf[Buffer_Max];
 
-    sprintf(buf, "%s wants to play with you, type yes or no: \n", users[userlist[selfFd]].acc);
-    if (write(opponentFd, buf, sizeof(buf)) < 0)
+    roomID = selectRoom();
+
+    if (roomID < 0)
     {
-        perror("Server write error");
-        sprintf(buf, "Send Error");
-        if (write(selfFd, buf, sizeof(buf)) < 0)
+        sprintf(buf, "Sorry, there is no empty room for playing!");
+    }
+    else
+    {
+        sprintf(buf, "%s wants to play with you, type yes or no: ", users[selfID].acc);
+        if ((writeCnt = write(opponentFd, buf, sizeof(buf))) <= 0)
+        {
+            if (writeCnt == 0)
+            {
+                sprintf(buf, "%s disconnection", users[opponentID].acc);
+                userLogout(opponentFd, &userlist[opponentFd]);
+            }
+            else
+            {
+                perror("Server write error");
+                sprintf(buf, "Send invitation error");
+            }
+        }
+        else
+        {
+            sprintf(buf, "Waiting...");
+            users[selfID].roomID = roomID;
+            users[selfID].onGame = 0; // waiting state
+            users[opponentID].roomID = roomID;
+            users[opponentID].onGame = 0; // waiting state
+            RoomActive[roomID] = 1;
+            rooms[roomID].player1 = selfID;
+            rooms[roomID].player2 = opponentID;
+            return;
+        }
+    }
+
+    if ((writeCnt = write(selfFd, buf, sizeof(buf))) <= 0)
+    {
+        if (writeCnt == 0) {
+            if(RoomActive[roomID]) {
+                resetGame(roomID);
+            }
+            leaveGame(opponentID);
+            userLogout(selfFd, &userlist[selfFd]);
+        }       
+        else         
             perror("Server write error");
-        return;
     }
-    sprintf(buf, "Waiting...\n");
-    if (write(selfFd, buf, sizeof(buf)) < 0)
-    {
-        perror("Server write error");
-    }
-    return;
-}
+} 
 
 void parseRequest(int connectFd, int *userlist)
 {
-    int readCnt, writeCnt, opponent;
+    int readCnt, writeCnt;
     char buf[Buffer_Max];
-    
+
     if ((readCnt = read(connectFd, buf, sizeof(buf))) <= 0)
     {
         if (readCnt == 0)
-        {
-            printf("Client disconnection\n");
-            users[userlist[connectFd]].online = 0;
-            FD_CLR(connectFd, &fds);
-            close(connectFd);
-        }
+            userLogout(connectFd, &userlist[connectFd]);
         else
             perror("Server read error");
     }
@@ -238,14 +393,23 @@ void parseRequest(int connectFd, int *userlist)
         if (strncmp(buf, "list", 4) == 0)
             listUsers(connectFd);
         else if (strncmp(buf, "logout", 6) == 0)
-        {
             userLogout(connectFd, userlist);
-        }
         else if (strncmp(buf, "PK", 2) == 0)
+            sentInvitation(userlist, connectFd, users[atoi(buf + 3)].fd);
+        else
         {
-            opponent = atoi(buf + 3);
-            printf("opponent: %d, fd: %d\n", opponent, users[opponent].fd);
-            sentInvitation(userlist, connectFd, users[opponent].fd);
+            int connectID = userlist[connectFd];
+
+            else if (strncmp(buf, "yes", 3) == 0) {
+                if (users[connectID].onGame == 0) 
+                    acceptGame(userlist[rooms[users[connectID].roomID].player1], connectID);
+                /* Error Handler */
+            }
+            else if (strncmp(buf, "no", 2) == 0) {
+                if (users[connectID].onGame == 0) 
+                    rejectGame(userlist[rooms[users[connectID].roomID].player1], connectID);
+                /* Error Handler */
+            }
         }
     }
 }
@@ -269,7 +433,7 @@ int main()
 
         if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1)
         {
-            perror("select");
+            perror("Select error");
             continue;
         }
 
