@@ -8,6 +8,7 @@
 #include <sys/select.h>
 
 #define Buffer_Max 1024
+fd_set fds, read_fds;
 
 int connect_to_server(const char *host, const char *port)
 {
@@ -92,47 +93,77 @@ int Login(int socketfd)
     return -1;
 }
 
+int parseResponse(int socketfd)
+{
+    int readCnt = 0, writeCnt = 0;
+    char buf[Buffer_Max];
+
+    if (fgets(buf, 1024, stdin) == NULL)
+        return -1;
+
+    buf[strlen(buf) - 1] = '\0';
+    if (write(socketfd, buf, sizeof(buf)) < 0)
+    {
+        perror("Client write error");
+        return -1;
+    }
+
+    readCnt = read(socketfd, buf, sizeof(buf));
+    if (readCnt == 0)
+    {
+        printf("Server has terminated\n");
+        return 0;
+    }
+    else if (readCnt < 0)
+    {
+        perror("Client read error");
+        return -1;
+    }
+    else
+    {
+        if (strncmp(buf, "logout", 6) == 0)
+            return 0;
+        else {
+            printf("%s\n", buf);
+            return 1;
+        }
+    }
+}
+
 int main()
 {
-    int socketfd, readCnt = 0, writeCnt = 0;
-    char input_acc[64], input_pwd[64], buf[1024];
+    int socketfd, fdmax, ret = 0;
 
     socketfd = connect_to_server("127.0.0.1", "8080");
-
     if (Login(socketfd) < 0)
         exit(EXIT_SUCCESS);
-    memset(buf, 0, sizeof(buf));
+
+    FD_ZERO(&fds);
+    FD_ZERO(&read_fds);
+    FD_SET(0, &fds); // stdin
+    FD_SET(socketfd, &fds);
+    fdmax = socketfd;
     getchar();
-    rewind(stdin);
-    while (fgets(buf, 1024, stdin) != NULL)
+    while (1)
     {
-        buf[strlen(buf) - 1] = '\0';
-        if (write(socketfd, buf, sizeof(buf)) < 0)
+        read_fds = fds;
+
+        if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1)
         {
-            perror("Client write error");
+            perror("select");
             continue;
         }
 
-        readCnt = read(socketfd, buf, sizeof(buf));
-        if (readCnt == 0)
+        if (FD_ISSET(0, &read_fds))
         {
-            printf("Server has terminated\n");
-            break;
-        }
-        else if (readCnt < 0)
-        {
-            perror("Client read error");
-            continue;
-        }
-        else {
-            if(strncmp(buf, "logout", 6) == 0) {
+            ret = parseResponse(socketfd);
+
+            if(ret == -1)
+                continue;
+            else if(ret == 0)
                 break;
-            }
-            else {
-                printf("test\n");
-                printf("%s\n", buf);
-            }
         }
+
     }
     shutdown(socketfd, SHUT_WR);
     close(socketfd);

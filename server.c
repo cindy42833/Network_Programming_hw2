@@ -156,7 +156,8 @@ void userLogin(int connectFd, int *userlist)
     }
 }
 
-void userLogout(int connectFd, int *userlist) {
+void userLogout(int connectFd, int *userlist)
+{
     char buf[Buffer_Max];
 
     printf("Client logout\n");
@@ -170,17 +171,20 @@ void userLogout(int connectFd, int *userlist) {
         perror("Server write error");
 
     FD_CLR(connectFd, &fds);
-    shutdown(connectFd, SHUT_RD);    
+    shutdown(connectFd, SHUT_RD);
     close(connectFd);
 }
 
-void listUsers(int connectFd) {
+void listUsers(int connectFd)
+{
     char buf[Buffer_Max], info[128];
 
     sprintf(buf, "------- Online list -------\n");
 
-    for(int i=0; i<USER_MAX; i++) {
-        if(users[i].online) {
+    for (int i = 0; i < USER_MAX; i++)
+    {
+        if (users[i].online)
+        {
             sprintf(info, "userId: %d, acc: %s\n", i, users[i].acc);
             strncat(buf, info, strlen(info));
         }
@@ -191,11 +195,13 @@ void listUsers(int connectFd) {
         perror("Server write error");
 }
 
-void sentInvitation(int *userlist, int selfFd, int opponentFd) {
+void sentInvitation(int *userlist, int selfFd, int opponentFd)
+{
     char buf[Buffer_Max];
 
     sprintf(buf, "%s wants to play with you, type yes or no: \n", users[userlist[selfFd]].acc);
-    if (write(opponentFd, buf, sizeof(buf)) < 0) {
+    if (write(opponentFd, buf, sizeof(buf)) < 0)
+    {
         perror("Server write error");
         sprintf(buf, "Send Error");
         if (write(selfFd, buf, sizeof(buf)) < 0)
@@ -203,19 +209,52 @@ void sentInvitation(int *userlist, int selfFd, int opponentFd) {
         return;
     }
     sprintf(buf, "Waiting...\n");
-    if(write(selfFd, buf, sizeof(buf)) < 0) {
+    if (write(selfFd, buf, sizeof(buf)) < 0)
+    {
         perror("Server write error");
     }
     return;
 }
 
+void parseRequest(int connectFd, int *userlist)
+{
+    int readCnt, writeCnt, opponent;
+    char buf[Buffer_Max];
+    
+    if ((readCnt = read(connectFd, buf, sizeof(buf))) <= 0)
+    {
+        if (readCnt == 0)
+        {
+            printf("Client disconnection\n");
+            users[userlist[connectFd]].online = 0;
+            FD_CLR(connectFd, &fds);
+            close(connectFd);
+        }
+        else
+            perror("Server read error");
+    }
+    else
+    {
+        if (strncmp(buf, "list", 4) == 0)
+            listUsers(connectFd);
+        else if (strncmp(buf, "logout", 6) == 0)
+        {
+            userLogout(connectFd, userlist);
+        }
+        else if (strncmp(buf, "PK", 2) == 0)
+        {
+            opponent = atoi(buf + 3);
+            printf("opponent: %d, fd: %d\n", opponent, users[opponent].fd);
+            sentInvitation(userlist, connectFd, users[opponent].fd);
+        }
+    }
+}
+
 int main()
 {
-    int listenFd, connectFd, readCnt, writeCnt, opponent;
+    int listenFd, connectFd;
     int userlist[64];
-    char buf[Buffer_Max];
     memset(userlist, -1, sizeof(userlist));
-
 
     listenFd = create_socket(NULL, "8080");
 
@@ -234,45 +273,18 @@ int main()
             continue;
         }
 
-        if (FD_ISSET(listenFd, &read_fds))
-            acceptClient(listenFd);
-        else
+        for (int i = 0; i <= fdmax; i++)
         {
-            for (int i = 0; i <= fdmax; i++)
+            if (FD_ISSET(i, &read_fds))
             {
-                if (FD_ISSET(i, &read_fds))
+                if (listenFd == i)
+                    acceptClient(listenFd);
+                else
                 {
                     if (userlist[i] == -1) // Login
                         userLogin(i, &userlist[i]);
                     else
-                    {
-                        if ((readCnt = read(i, buf, sizeof(buf))) <= 0)
-                        {
-                            if (readCnt == 0)
-                            {
-                                printf("Client disconnection\n");
-                                users[userlist[i]].online = 0;
-                                FD_CLR(i, &fds);
-                                close(i);
-                            }
-                            else
-                                perror("Server read error");
-                        }
-                        else
-                        {
-                            if (strncmp(buf, "list", 4) == 0)
-                                listUsers(i);
-                            else if(strncmp(buf, "logout", 6) == 0) {
-                                userLogout(i, userlist);
-                            }
-                            else if(strncmp(buf, "PK", 2) == 0){
-                                opponent = atoi(buf + 3);
-                                printf("opponent: %d, fd: %d\n", opponent, users[opponent].fd);
-                                sentInvitation(userlist, i, users[opponent].fd);
-                            }
-                        }
-                    }
-                    break;
+                        parseRequest(i, userlist);
                 }
             }
         }
