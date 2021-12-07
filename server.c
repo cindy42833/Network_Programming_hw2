@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -59,35 +60,29 @@ Users users[] = {
 };
 
 Rooms rooms[4] = {
-    {
-        .board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
-        .player1 = -1,
-        .player2 = -1,
-        .round = 0
-    },
-    {
-        .board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
-        .player1 = -1,
-        .player2 = -1,
-        .round = 0
-    },
-    {
-        .board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
-        .player1 = -1,
-        .player2 = -1,
-        .round = 0
-    },
-    {
-        .board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
-        .player1 = -1,
-        .player2 = -1,
-        .round = 0
-    },
+    {.board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+     .player1 = -1,
+     .player2 = -1,
+     .round = 0},
+    {.board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+     .player1 = -1,
+     .player2 = -1,
+     .round = 0},
+    {.board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+     .player1 = -1,
+     .player2 = -1,
+     .round = 0},
+    {.board = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+     .player1 = -1,
+     .player2 = -1,
+     .round = 0},
 };
 
 int RoomActive[4], userlist[64];
 int fdmax, errno;
 fd_set fds, read_fds;
+
+void userLogout(int);
 
 int create_socket(const char *host, const char *port)
 {
@@ -130,20 +125,6 @@ int create_socket(const char *host, const char *port)
     }
 
     return socket_listen;
-}
-
-void userLogout(int connectFd)
-{
-    int id = userlist[connectFd];
-    users[id].fd = -1;
-    users[id].online = 0;
-    users[id].onGame = -1;
-    users[id].roomID = -1;
-
-    userlist[connectFd] = -1;
-    FD_CLR(connectFd, &fds);
-    shutdown(connectFd, SHUT_RD);
-    close(connectFd);
 }
 
 int Read(int fd, char *buf, int buf_size)
@@ -195,6 +176,46 @@ int Write(int fd, char *buf, int buf_size)
         }
     }
     return writeCnt;
+}
+
+void leaveGame(int userID)
+{
+    users[userID].onGame = -1;
+    users[userID].roomID = -1;
+}
+
+void resetGame(int roomID)
+{
+    RoomActive[roomID] = 0;
+    memset(rooms[roomID].board, ' ', 9);
+    rooms[roomID].player1 = -1;
+    rooms[roomID].player2 = -1;
+    rooms[roomID].round = 0;
+}
+
+void userLogout(int connectFd)
+{
+    int id = userlist[connectFd];
+    users[id].fd = -1;
+    users[id].online = 0;
+
+    if (users[id].onGame >= 0)
+    {
+        int opponentID = (id == rooms[users[id].roomID].player1) ? rooms[users[id].roomID].player2 : rooms[users[id].roomID].player1;
+        char buf[Buffer_Max];
+
+        sprintf(buf, "Game terminated because the other player left game");
+        leaveGame(opponentID);
+        resetGame(users[id].roomID);
+        Write(users[opponentID].fd, buf, sizeof(buf));
+    }
+
+    users[id].onGame = -1;
+    users[id].roomID = -1;
+    userlist[connectFd] = -1;
+    FD_CLR(connectFd, &fds);
+    shutdown(connectFd, SHUT_RD);
+    close(connectFd);
 }
 
 void acceptClient(int listenFd)
@@ -282,35 +303,32 @@ int selectRoom()
     return -1;
 }
 
-void leaveGame(int userID)
+int checkMove(int roomID, char *buf, int index)
 {
-    users[userID].onGame = -1;
-    users[userID].roomID = -1;
-}
-
-void resetGame(int roomID)
-{
-    RoomActive[roomID] = 0;
-    memset(rooms[roomID].board, ' ', 9);
-    rooms[roomID].player1 = -1;
-    rooms[roomID].player2 = -1;
-    rooms[roomID].round = 0;
+    if (index < 0 || index > 9)
+    {
+        sprintf(buf, "Move must be 0~8");
+        return 0;
+    }
+    else if (rooms[roomID].board[index] != ' ')
+    {
+        sprintf(buf, "This block has filled, please select another block");
+        return 0;
+    }
+    return 1;
 }
 
 void drawBoard(int roomID, int turn, char *buf, int index)
 {
-    char tmp[Buffer_Max];
-    memset(tmp, 0, sizeof(tmp));
+    memset(buf, 0, sizeof(buf));
 
-    if (index >= 0)
+    if (index == -1) // first print
+        sprintf(buf, " 0 | 1 | 2 \n-----------\n 3 | 4 | 5 \n-----------\n 6 | 7 | 8 \n");
+    else
     {
         rooms[roomID].board[index] = (turn) ? 'O' : 'X';
-        sprintf(tmp, " %c | %c | %c \n-----------\n %c | %c | %c \n-----------\n %c | %c | %c \n", rooms[roomID].board[0], rooms[roomID].board[1], rooms[roomID].board[2], rooms[roomID].board[3], rooms[roomID].board[4], rooms[roomID].board[5], rooms[roomID].board[6], rooms[roomID].board[7], rooms[roomID].board[8]);
+        sprintf(buf, " %c | %c | %c \n-----------\n %c | %c | %c \n-----------\n %c | %c | %c \n", rooms[roomID].board[0], rooms[roomID].board[1], rooms[roomID].board[2], rooms[roomID].board[3], rooms[roomID].board[4], rooms[roomID].board[5], rooms[roomID].board[6], rooms[roomID].board[7], rooms[roomID].board[8]);
     }
-    else
-        sprintf(tmp, " 0 | 1 | 2 \n-----------\n 3 | 4 | 5 \n-----------\n 6 | 7 | 8 \n");
-
-    strncat(buf, tmp, strlen(tmp));
 }
 
 void acceptGame(int player1_ID, int player2_ID)
@@ -324,20 +342,8 @@ void acceptGame(int player1_ID, int player2_ID)
     sprintf(buf, "Game Start, enter 0-8 to make a move, %s first\n", users[player1_ID].acc);
     drawBoard(roomID, -1, buf, -1);
 
-    if ((writeCnt = Write(player1_fd, buf, sizeof(buf))) < 0)
-    {
-        sprintf(buf, "Game terminated because the other player left game");
+    if (Write(player1_fd, buf, sizeof(buf)) > 0)
         Write(player2_fd, buf, sizeof(buf));
-        leaveGame(player2_ID);
-        resetGame(roomID);
-    }
-    else if ((writeCnt = Write(player2_fd, buf, sizeof(buf))) < 0)
-    {
-        sprintf(buf, "Game terminated because the other player left game");
-        Write(player1_fd, buf, sizeof(buf));
-        leaveGame(player1_ID);
-        resetGame(roomID);
-    }
 }
 
 void rejectGame(int player1_ID, int player2_ID)
@@ -361,67 +367,182 @@ void sendInvitation(int selfFd, int opponentID)
     int writeCnt;
     char buf[Buffer_Max];
 
-    if (opponentID >= USER_MAX)
+    if (users[userlist[selfFd]].onGame >= 0)
     {
-        sprintf(buf, "User not found");
+        sprintf(buf, "You cannot send invitation now");
         Write(selfFd, buf, sizeof(buf));
     }
     else
     {
-        int roomID, selfID = userlist[selfFd], opponentFd = users[opponentID].fd;
-        if (opponentFd == -1)
+        if (opponentID >= USER_MAX) // User not found
         {
-            sprintf(buf, "%s is offline", users[opponentID].acc);
-            Write(selfFd, buf, sizeof(buf));
-        }
-        else if (selfFd == opponentFd)
-        {
-            sprintf(buf, "You cannot play with yourself");
-            Write(selfFd, buf, sizeof(buf));
-        }
-        else if(users[opponentID].onGame >= 0)  // waiting or starting state
-        {
-            sprintf(buf, "You cannot invite %s now", users[opponentID].acc);
+            sprintf(buf, "User not found");
             Write(selfFd, buf, sizeof(buf));
         }
         else
         {
-            roomID = selectRoom();
-            if (roomID < 0)
-                sprintf(buf, "Sorry, there is no empty room for playing!");
+            int roomID, selfID = userlist[selfFd], opponentFd = users[opponentID].fd;
+            if (opponentFd == -1) // User is offline
+            {
+                sprintf(buf, "%s is offline", users[opponentID].acc);
+                Write(selfFd, buf, sizeof(buf));
+            }
+            else if (selfFd == opponentFd) // Play with yourself
+            {
+                sprintf(buf, "You cannot play with yourself");
+                Write(selfFd, buf, sizeof(buf));
+            }
+            else if (users[opponentID].onGame >= 0) // waiting or starting state
+            {
+                sprintf(buf, "You cannot invite %s now", users[opponentID].acc);
+                Write(selfFd, buf, sizeof(buf));
+            }
             else
             {
-                sprintf(buf, "%s wants to play with you, type yes or no: ", users[selfID].acc);
-                if ((writeCnt = Write(opponentFd, buf, sizeof(buf))) < 0)
-                {
-                    sprintf(buf, "%s disconnect unexpectlly", users[opponentID].acc);
-                    Write(selfFd, buf, sizeof(buf));
-                    RoomActive[roomID] = 0;
-                }
+                roomID = selectRoom();
+                if (roomID < 0)
+                    sprintf(buf, "Sorry, there is no empty room for playing!");
                 else
                 {
-                    sprintf(buf, "Waiting...");
-                    if ((writeCnt = Write(selfFd, buf, sizeof(buf))) > 0)
+                    sprintf(buf, "%s wants to play with you, type yes or no: ", users[selfID].acc);
+                    if ((writeCnt = Write(opponentFd, buf, sizeof(buf))) < 0)
                     {
-                        users[selfID].roomID = roomID;
-                        users[selfID].onGame = 0; // waiting state
-                        users[opponentID].roomID = roomID;
-                        users[opponentID].onGame = 0; // waiting state
-                        RoomActive[roomID] = 1;
-                        rooms[roomID].player1 = selfID;
-                        rooms[roomID].player2 = opponentID;
+                        Write(selfFd, buf, sizeof(buf));
+                        RoomActive[roomID] = 0;
                     }
                     else
-                        RoomActive[roomID] = 0;
+                    {
+                        sprintf(buf, "Waiting...");
+                        if ((writeCnt = Write(selfFd, buf, sizeof(buf))) > 0)
+                        {
+                            users[selfID].roomID = roomID;
+                            users[selfID].onGame = 0; // waiting state
+                            users[opponentID].roomID = roomID;
+                            users[opponentID].onGame = 0; // waiting state
+                            RoomActive[roomID] = 1;
+                            rooms[roomID].player1 = selfID;
+                            rooms[roomID].player2 = opponentID;
+                        }
+                        else
+                            RoomActive[roomID] = 0;
+                    }
                 }
             }
         }
     }
 }
 
-void playGame(int player1_ID, int player2_ID)
+int checkWinner(int roomID)
 {
+    int ret;
+    char *ptr = rooms[roomID].board;
+    for (int i = 0; i < 9; i += 3)
+    {
+        if ((ptr[i] == ptr[i + 1] && ptr[i + 1] == ptr[i + 2]))
+            return 1;
+    }
+    for (int i = 0; i < 3; i++)
+    {
+        if ((ptr[i] == ptr[i + 3] && ptr[i + 3] == ptr[i + 6]))
+            return 1;
+    }
+    if ((ptr[0] == ptr[4] && ptr[4] == ptr[8]) || (ptr[2] == ptr[4] && ptr[4] == ptr[6]))
+        return 1;
+    return 0;
+}
 
+void playGame(int playerID, int index)
+{
+    int writeCnt, roomID, turn, whichPlayer, opponentID, thisPlayerFd, opponentFd;
+    char buf[Buffer_Max], tmp[Buffer_Max];
+    memset(buf, 0, sizeof(buf));
+    memset(tmp, 0, sizeof(tmp));
+
+    roomID = users[playerID].roomID;
+    turn = (rooms[roomID].round + 1) % 2;              // 1 is player1 turn, 0 is player2 turn
+    whichPlayer = (rooms[roomID].player1 == playerID); // 1 is player1, 0 is player2
+    opponentID = (whichPlayer) ? rooms[roomID].player2 : rooms[roomID].player1;
+    thisPlayerFd = users[playerID].fd;
+    opponentFd = users[opponentID].fd;
+
+    if (turn == whichPlayer)
+    {
+        if (checkMove(roomID, buf, index))
+        {
+            rooms[roomID].round++;
+            drawBoard(roomID, turn, buf, index);
+            if (checkWinner(roomID) && rooms[roomID].round > 4)
+            {
+                sprintf(tmp, "Game end, winner is %s", users[playerID].acc);
+                resetGame(roomID);
+                leaveGame(playerID);
+                leaveGame(opponentID);
+            }
+            else
+            {
+                if (rooms[roomID].round == 9)
+                {
+                    sprintf(tmp, "Game end, no winner");
+                    resetGame(roomID);
+                    leaveGame(playerID);
+                    leaveGame(opponentID);
+                }
+                else
+                    sprintf(tmp, "It's %s turn, enter 0-8 to make a move", users[opponentID].acc);
+            }
+
+            strncat(buf, tmp, strlen(tmp));
+            if ((writeCnt = Write(thisPlayerFd, buf, sizeof(buf))) < 0)
+            {
+                sprintf(buf, "Game terminated because the other player left game");
+                Write(opponentFd, buf, sizeof(buf));
+                leaveGame(opponentID);
+                resetGame(roomID);
+            }
+            else if ((writeCnt = Write(opponentFd, buf, sizeof(buf))) < 0)
+            {
+                sprintf(buf, "Game terminated because the other player left game");
+                Write(thisPlayerFd, buf, sizeof(buf));
+                leaveGame(playerID);
+                resetGame(roomID);
+            }
+            return;
+        }
+    }
+    else
+        sprintf(buf, "It's not your turn");
+    if (Write(thisPlayerFd, buf, sizeof(buf)) < 0)
+    {
+        resetGame(roomID);
+        leaveGame(opponentID);
+    }
+}
+
+int cancelInvitation(int connectFd)
+{
+    int connectID;
+    char buf[Buffer_Max];
+
+    connectID = userlist[connectFd];
+    if(users[connectID].onGame >= 0) {
+        int opponentID, opponentFd, roomID;
+
+        roomID = users[connectID].roomID;
+        opponentID = rooms[roomID].player2;
+        opponentFd = users[opponentID].fd;
+        resetGame(roomID);
+        leaveGame(connectID);
+        leaveGame(opponentID);
+
+        sprintf(buf, "Game invitation cancel");
+        Write(connectFd, buf, sizeof(buf));
+        Write(opponentFd, buf, sizeof(buf));
+    }
+    else
+    {
+        sprintf(buf, "You haven't send invitation");
+        Write(connectFd, buf, sizeof(buf));
+    }
 }
 
 void parseRequest(int connectFd)
@@ -430,33 +551,24 @@ void parseRequest(int connectFd)
 
     if (Read(connectFd, buf, sizeof(buf)) > 0)
     {
-        if (strncmp(buf, "list", 4) == 0)
+        if (strcmp(buf, "list") == 0)
             listUsers(connectFd);
-        else if (strncmp(buf, "logout", 6) == 0)
+        else if (strcmp(buf, "logout") == 0)
             userLogout(connectFd);
         else if (strncmp(buf, "PK", 2) == 0)
             sendInvitation(connectFd, atoi(buf + 3));
+        else if(strcmp(buf, "cancel") == 0)
+            cancelInvitation(connectFd);
         else
         {
             int connectID = userlist[connectFd];
 
-            if (strncmp(buf, "yes", 3) == 0)
-            {
-                if (users[connectID].onGame == 0)
-                    acceptGame(rooms[users[connectID].roomID].player1, connectID);
-                /* Error Handler */
-            }
-            else if (strncmp(buf, "no", 2) == 0)
-            {
-                if (users[connectID].onGame == 0)
-                    rejectGame(rooms[users[connectID].roomID].player1, connectID);
-                /* Error Handler */
-            }
-            else
-            {
-                if (users[connectID].onGame == 1)
-                    playGame(rooms[users[connectID].roomID].player1, connectID);
-            }
+            if (strncmp(buf, "yes", 3) == 0 && users[connectID].onGame == 0)
+                acceptGame(rooms[users[connectID].roomID].player1, connectID);
+            else if (strncmp(buf, "no", 2) == 0 && users[connectID].onGame == 0)
+                rejectGame(rooms[users[connectID].roomID].player1, connectID);
+            else if (users[connectID].onGame == 1)
+                playGame(connectID, atoi(buf));
         }
     }
 }
