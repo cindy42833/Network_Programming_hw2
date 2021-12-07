@@ -110,6 +110,7 @@ int sendRequest(int socketfd)
         perror("Client write error");
         return -1;
     }
+    
     return 1;
 }
 
